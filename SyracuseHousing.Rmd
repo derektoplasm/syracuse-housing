@@ -1,0 +1,812 @@
+
+---
+title: "Derek Crowe for GovEx"
+subtitle: "Part 2 Data exploration and manipulation"
+output:
+    html_document:
+      df_print: paged
+    pdf_document: default
+    html_notebook: default
+author: "Derek Crowe"
+date: "`r Sys.Date()`"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+***
+
+### Requirements
+
+------------------------------------------------------------------------
+
+```{r}
+#Libraries
+library(tidyverse)
+library(lubridate)
+
+#Custom operators
+`%!in%` = Negate(`%in%`)
+```
+
+<br>
+
+### Import data
+
+------------------------------------------------------------------------
+
+```{r}
+
+#define relative path to data files
+filesData <- list.files(path = "Data",
+             pattern = "*.csv", 
+             full.names = T)
+
+#define relative path to dictionary files
+filesDict <- list.files(path = "Data/Dictionaries",
+             pattern = "*.csv", 
+             full.names = T)
+
+#Define object names for data and dictionary files
+filenamesData <- gsub(basename(filesData), pattern = "*.csv", replacement ="")
+filenamesDict <- gsub(basename(filesDict), pattern = "*.csv", replacement ="")
+
+#loop through files and assign the object name with the data frame read in from the csv. data and dictionary have separate sequences to account for the fact that dictionary files don't have column names
+for (i in seq_along(filesData)) {
+  assign(filenamesData[i], read_csv(filesData[i], show_col_types = FALSE))
+  assign(filenamesDict[i], read_csv(filesDict[i], show_col_types = FALSE, col_names = FALSE))
+}
+
+```
+
+<br>
+
+## Inspection of Sales data
+
+------------------------------------------------------------------------
+
+*   Will treat sales data set as the primary reference.
+*   Will consider PARCEL_ID to be the unique key linking all three data
+    sets
+*   There are 7 NA PARCEL_IDs in the sales
+    +   remove NAs
+*   All date times were read in as characters.
+    +   Convert to datetime class and inspect against original data
+*   some categorical variables were pulled in as characters
+    +   Convert them to factors
+*   Notes say to expect ARMS_LENGHT but data set seems to be updated to
+    proper spelling
+*   some cleaning here
+    +   get rid of columns that have unknown description
+    +   PHYS_INSP_DATE is all nulls and one NA, get rid of it
+*   Objects are named d## where d stands for Derek to denote object creator and ## is essentially a version number
+
+```{r}
+sales_d01 <- 
+  sales |>
+  filter(!is.na(PARCEL_ID)) |>
+  mutate(SALE_DATE_FORMATTED = mdy_hm(SALE_DATE)) |>
+  relocate(SALE_DATE_FORMATTED, .after = SALE_DATE) |>
+  arrange(desc(SALE_DATE_FORMATTED)) |>
+  mutate(ARMS_LENGTH = as.factor(ARMS_LENGTH), 
+         SALETYPE = as.factor(SALETYPE))|>
+  select(-c("TIMESTAMP", "MAP_PROVIDED", "VAL_USEABLE", "PHYS_INSP_DATE"))
+
+```
+
+*  2-digit years 69-99 are assumed to be 2069-2099
+    +  subtract 100 years from any year after 2023
+
+```{r}
+sales_d02 <- 
+  sales_d01 |>
+  mutate(SALE_DATE_FORMATTED = case_when(
+    year(SALE_DATE_FORMATTED) > 2023 ~ SALE_DATE_FORMATTED - years(100),
+    TRUE ~ SALE_DATE_FORMATTED)) |>
+  select(-SALE_DATE)
+
+sales_d02
+
+```
+
+```{r}
+summary(sales_d02)
+```
+
+*   I see that SALETYPE, NET_SALE_PRICE, OWNER_ID, and ROLL_YR also have
+    NAs
+    +   keep these NAs as we might want data from other columns; we've
+        already filtered out NA Parcel IDs
+*   Curious about sale prices, looks like there's a 70M home here,
+    what's going on there?
+    +   plot distribution of sale prices vs. net sales just to see what
+        it looks like
++ Plot the sale prices vs net sale prices to check out this 70M home and
+also include ARMS_LENGTH as a color just to see how these things relate.
+Notes mentioned something about ARMS_LENGTH being a categorical
+variable, let's convert that to a factor for plotting. Still don't quite
+understand arms length.
+
+```{r}
+sales_d02 |>
+  filter(!is.na(NET_SALE_PRICE)) |>
+  select(SALE_PRICE, NET_SALE_PRICE, ARMS_LENGTH) |>
+  ggplot(aes(x = SALE_PRICE, y = NET_SALE_PRICE)) + 
+  geom_point(aes(color = ARMS_LENGTH)) + 
+  theme_minimal() + 
+  labs(title = "Syracuse Housing Data", 
+             subtitle = element_blank(), 
+             y = "Net Sales Price", 
+             x = "Sale Price") + 
+  theme(legend.position="right", 
+                axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+                axis.title.x = element_text(margin = margin(t = 20)),
+                plot.margin = margin(20,50,20,0),
+                plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+```
+
+*   I assumed from the summary stats that the max NET_SALE_PRICE of 58M
+    must correspond to the parcel with a SALE_PRICE of 70M, but this
+    shows that its NET_SALE_PRICE was much lower; 54.9K. Is this an
+    entry error or something else?
+
+* Add an outlier column to mark parcel IDs that might be outliers in
+one or more dimensions, such as this. Will be able to filter outlier
+rows in future analyses if desired.
+
+*   ARMS_LENGTH distribution from this view doesn't reveal anything
+    obvious to me.
+
+```{r}
+sales_d03 <- 
+  sales_d02 |>
+  mutate(outlier = case_when(
+    PARCEL_ID == 1285 ~ 1,
+    TRUE ~ 0))
+```
+
+*  I'll see what the distribution for NBR_PARCELS looks like; max value
+    is wild there too. I'll separate things by sale type, as the
+    distribution of each category might be different.
+
+```{r}
+sales_d03 |>
+  select(NBR_PARCELS, SALETYPE) |>
+  ggplot(
+    aes(x = SALETYPE, y = NBR_PARCELS, color = SALETYPE)) + 
+    geom_boxplot() + 
+    theme_minimal() + 
+    labs(title = "Syracuse Housing Prices", 
+             subtitle = element_blank(), 
+             y = "Number of Parcels", 
+             x = "Sale Type") + 
+    theme(legend.position="right", 
+                axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+                axis.title.x = element_text(margin = margin(t = 20)),
+                plot.margin = margin(20,50,20,0),
+                plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+```
+
+*   Looks like sales involving land and buildings have the largest
+    variance of parcel numbers. I'm not going to flag the 851 parcel row
+    as an outlier given this distribution. Idk how apartment complexes
+    or dorms are coded in here; the notes say a parcel can have multiple
+    sites, so maybe this is SU and we're looking at student housing?
+
+* Google Arms length; in combination with notes on exercise sheet, I
+take it to mean we can probably trust the transaction, with some
+caveats. Looking at the data suggests that many of the one-dollar
+transactions are not arms length, meaning we can already see a big
+filtering of low-price (read: suspicious) transactions if we remove
+those that are not arms length -- Filter to include only arms length
+transactions
+
+```{r}
+sales_d04 <- 
+  sales_d03 |>
+  filter(ARMS_LENGTH == 1)
+
+sales_d04
+```
+
+*  view distribution of what we might start to call "representative" sale prices.
+
+```{r}
+sales_d04 |>
+  select(SALE_PRICE) |>
+  summary()
+```
+
++   After playing around a bit, I'm going to make separate histograms to
+    visualize different ranges that seem to capture the natural breaks
+    in the data: up to .5M, between .5M and 2.5M, and above 2.5M
+
+```{r}
+sales_d04 |>
+  filter(SALE_PRICE < 500000) |>
+  ggplot(
+    aes(x = SALE_PRICE)) + 
+    geom_histogram(bins=250, fill = "#648FFF") + 
+    theme_minimal() + 
+    labs(title = "Histogram of Sale Prices < $.5M", 
+             subtitle = element_blank(), 
+             y = "Count", 
+             x = "Sale Price") + 
+    theme(legend.position="right", 
+                axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+                axis.title.x = element_text(margin = margin(t = 20)),
+                plot.margin = margin(20,50,20,0),
+                plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+
+sales_d04 |>
+  filter(outlier == 0) |>
+  filter(SALE_PRICE > 500000 & SALE_PRICE < 2500000) |>
+  ggplot(
+    aes(x = SALE_PRICE)) + 
+    geom_histogram(bins=50, fill = "#648FFF") + 
+    theme_minimal() + 
+    labs(title = "Histogram of Sale Prices between $0.5M and $2.5M", 
+         subtitle = element_blank(), 
+         y = "Count", 
+         x = "Sale Price") + 
+    theme(legend.position="right", 
+          axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+          axis.title.x = element_text(margin = margin(t = 20)),
+          plot.margin = margin(20,50,20,0),
+          plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+
+sales_d04 |>
+  filter(SALE_PRICE > 2500000) |>
+  ggplot(
+    aes(x = SALE_PRICE)) + 
+    geom_histogram(bins=50, fill = "#648FFF") + 
+    theme_minimal() + 
+    labs(title = "Histogram of Sale Prices above $2.5M", 
+         subtitle = element_blank(), 
+         y = "Count", 
+         x = "Sale Price") + 
+    theme(legend.position="right", 
+          axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+          axis.title.x = element_text(margin = margin(t = 20)),
+          plot.margin = margin(20,50,20,0),
+          plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+```
+
+*   As per notes, there are still some sales that may be arms length but
+    very low, so I'm going to look specifically at the low end, choosing
+    a range up to 50k to look for trends in the low end to identify a
+    cutoff for arms length but suspiciously-low transactions
+
+```{r}
+sales_d04 |>
+  filter(SALE_PRICE < 50000) |>
+  ggplot(
+    aes(x = SALE_PRICE)) + 
+    geom_histogram(bins=50, fill = "#648FFF") + 
+    theme_minimal() + 
+    labs(title = "Histogram of Sale Prices Below $50k", 
+         subtitle = element_blank(), 
+         y = "Count", 
+         x = "Sale Price") + 
+    theme(legend.position="right", 
+          axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+          axis.title.x = element_text(margin = margin(t = 20)),
+          plot.margin = margin(20,50,20,0),
+          plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+```
+
+*   I look at this and see a strange bump under 10k that might even
+    continue up to around 15-20k. In conjunction with my prior knowledge
+    of general housing costs in Upstate NY, I think that any house sold
+    for below 20k could be counted as suspicious. I don't think it's
+    very reasonable for the average buyer to find a home this cheap, and
+    this might even be conservative. That being said, I will filter all
+    sales to exclude \< 20k. This leave 35,062 individual sales.
+
+```{r}
+sales_d05 <- 
+  sales_d04 |>
+  filter(SALE_PRICE > 20000) 
+```
+
+*   Notes also suggest sales may be suspicious if a house is bought,
+    refurbished, and sold again within a small time frame but I won't be
+    able to apply this filter until sales is merged with the
+    improvements data set
+
+*   Moving on to Improvements 
+
+<br>
+
+## Inspection of Improvements Data
+***
+```{r}
+improvements_datadict
+
+glimpse(improvements)
+```
+
+```{r}
+summary(improvements)
+```
+
+*   No NAs here, but summaries of DIM1, DIM2, and IMPROV_SQFT suggest
+    lots of zeros? -- check later
+
+*   a number of categorical variables are characters -- mutate to
+    factors
+
+```{r}
+improvements_d01 <-
+  improvements |>
+  mutate_at(c('STRUCTURE_CODE',
+              'GRADE',
+              'SALEPARCEL_IND'),
+            as.factor)
+
+improvements_d01
+```
+
+*   Need to deal with dates again -- convert INV_DATE to proper date
+    format
+
+```{r}
+improvements_d02 <-
+  improvements_d01 |>
+  mutate(INV_DATE_FORMATTED = mdy_hm(INV_DATE)) |>
+  relocate(INV_DATE_FORMATTED, .after = INV_DATE) |>
+  arrange(INV_DATE_FORMATTED) |>
+  select(-INV_DATE)
+
+improvements_d02
+
+```
+
+*  No issues with 1962/2062 lubridate bug
+
+*   INV_DATE in this table is labeled as "Sale Date" in the dictionary -
+    is it the same thing as sale date in Sale, or is it the improvement
+    sale date? As some kind of clue, it looks like the dates don't go
+    back farther than 1992. As another kind of clue ROLL_YR is all 2019,
+    so perhaps that's when they started tracking improvements? Unlikely
+    that no improvements have been made on houses that sold before 1992,
+    so could be some logging/tracking thing? Let's assume they're not
+    the same thing and check later. -- Will need to compare PARCEL_IDS
+    once the tables are merged to check this assumption?
+
+*   Another read of the notes indicates that they are independent:
+    "Improvements are registered independently of the time of a sale.
+    For the same property, we might find improvements done both before
+    and after a sale, but we only want to take into account those that
+    affect the sale price." So I might think that means we only want
+    improvements that are logged before a sale date, but what if a
+    property is sold more than once? And the notes say that improvements
+    are registered each time there's an inspection. Assuming inspections
+    happen before a sale, maybe that means for a given parcel, we only
+    want to account for the most recent improvement before the sale
+    date? -- after merge, group by PARCEL_ID and filter all improvements
+    save the last improvement made before the SALE_DATE if relevant
+
+  +   Check the zeros and wide variances in DIM1/2 and IMPROV_SQFT columns
+    + check distributions
+
+```{r}
+improvements_d02 |>
+  ggplot(
+    aes(x = DIM1, y = DIM2)) +
+  geom_point()
+```
+
+*   Looks like most improvements have a wide variance in DIM1 but very
+    low DIM2. One improvement seems to have a huge DIM1 and DIM2. Are
+    people pushing out a long wall a few feet? What even is an
+    improvement? How do IMPROV_SQFT and DIM1/DIM2 relate? -- check
+    relationship between IMPROV_SQFT and DIM1/DIM2
+
+```{r}
+improvements_d02 |>
+  ggplot(
+    aes(x = DIM1, y = IMPROV_SQFT)) +
+  geom_point()
+```
+
+*   OK that's weird. Looks like IMPROV_SQFT is not simply DIM1 \* DIM2,
+    which I assumed. What's going on?
+
+```{r}
+improvements_d02 |>
+  select(IMPROV_SQFT, DIM1, DIM2)
+```
+
+*   Maybe these are related but it looks like they are mutually
+    exclusive entries; all rows with a IMPROV_SQFT entry has 0s for DIM1
+    & DIM2, and vice versa. So perhaps this is duplicated data that
+    needs to be squished together. -- make a new column called
+    IMPROV_SQFT_V2 composed of either IMPROV_SQFT or DIM1\*DIM2 -- get
+    rid of DIM1, DIM2, IMPROV_SQFT
+
+```{r}
+improvements_d03 <- 
+  improvements_d02 |>
+  mutate(IMPROV_SQFT_V2 = case_when(IMPROV_SQFT == 0 ~ DIM1*DIM2,
+                                    TRUE ~ IMPROV_SQFT)) |>
+  select(-c("DIM1","DIM2","IMPROV_SQFT"))
+```
+
+*   Not sure if I'll need that but now I got it.
+
+*   Moving on to check Residential Building <br>
+
+<br>
+
+## Inspection of Residential Building Data
+***
+```{r}
+residential_building_datadict
+glimpse(residential_building)
+```
+
+*   Categorical variable reassignment to factors from characters --
+    EXT_WALL_MATERIAL, RBSMNT_TYP, CENTRAL_AIR, OVERALL_COND, GRADE,
+    BLDG_STYLE, HEAT_TYPE, SALEPARCEL_IND
+*   initial cleaning 
+  +   get rid of columns with unknown description
+
+```{r}
+residential_building_d01 <-
+  residential_building |>
+  mutate_at(c('EXT_WALL_MATERIAL', 
+              'RBSMNT_TYP', 
+              'CENTRAL_AIR', 
+              'OVERALL_COND', 
+              'GRADE', 
+              'BLDG_STYLE', 
+              'HEAT_TYPE',
+              'FUEL_TYPE',
+              'SALEPARCEL_IND'), 
+            as.factor) |>
+  select(-c("GRADE_ADJUST_PCT","TIMESTAMP"))
+
+residential_building_d01
+```
+
+*   Need to deal with dates again 
+  +   convert SALE_DATE to proper date format
+
+```{r}
+residential_building_d02 <-
+  residential_building_d01 |>
+  mutate(SALE_DATE_FORMATTED = mdy_hm(SALE_DATE)) |>
+  relocate(SALE_DATE_FORMATTED, .after = SALE_DATE) |>
+  arrange(desc(SALE_DATE_FORMATTED)) |>
+  select(-SALE_DATE)
+
+residential_building_d02
+```
+
+*   One date is wrong -- subtract a CENTURY from it
+
+```{r}
+residential_building_d03 <- 
+  residential_building_d02 |>
+  mutate(SALE_DATE_FORMATTED = case_when(
+    year(SALE_DATE_FORMATTED) > 2023 ~ SALE_DATE_FORMATTED - years(100),
+    TRUE ~ SALE_DATE_FORMATTED)) |>
+  arrange(SALE_DATE_FORMATTED)
+
+residential_building_d03
+
+```
+
+* basic summary stats
+
+```{r}
+summary(residential_building_d03)
+```
+
+*   See some NAs in some columns, but not sure if we need to kill the
+    entire row because of them. -- if they become pertinent to the
+    analysis, make sure to filter appropriately <br>
+
+<br>
+
+## Set Merging
+***
+*   Curious to see the sizes of data sets after initial filtering --
+    check dimensions
+
+```{r}
+dim(sales_d05)
+#35062
+dim(improvements_d03)
+#115131
+dim(residential_building_d03)
+#68817
+```
+
+*   View updated data sets for reference
+
+```{r}
+sales_d05 |> arrange(PARCEL_ID)
+residential_building_d03 |> arrange(PARCEL_ID)
+improvements_d03 |> arrange(PARCEL_ID)
+```
+
+*   Google Roll Year: The year following the annual lien date and the
+    regular assessment of property, beginning on July 1. Not sure if I
+    need this but *the more you know*
+
+*   We ultimately want sales data associated with all other metrics.
+
+*   I'm not sure the difference between SALE_DATE in the sales data set
+    and SALE_DATE in the residential data set
+
+*   We want all metrics for unique sales, so I think an inner join is
+    best to limit merge to rows which have values in all other data sets
+    +   inner join sales with residential info first, then inner join with improvements 
+    + rename joined columns which have duplicated names to reference the data set from which they came in case one is
+    more relevant than the other 
+    + relocate columns to make it easier to see salient columns first. I think there's a prettier way to do
+    this but it uses some "reduce" function that I'm not up on and I'm
+    not going to figure it out right now.
+
+```{r}
+data_m1 <-   
+  inner_join(sales_d05, residential_building_d03, by = "PARCEL_ID") |>
+  rename(SALE_DATE_FORMATTED_sales = SALE_DATE_FORMATTED.x,
+         SALE_DATE_FORMATTED_resid = SALE_DATE_FORMATTED.y,
+         PRINT_KEY_sales = PRINT_KEY.x,
+         PRINT_KEY_resid = PRINT_KEY.y,
+         ROLL_YR_sales = ROLL_YR.x,
+         ROLL_YR_resid = ROLL_YR.y) |>
+  relocate(SALE_DATE_FORMATTED_resid, .after = SALE_DATE_FORMATTED_sales) |>
+  relocate(PRINT_KEY_resid, .after = PRINT_KEY_sales) |>
+  relocate(ROLL_YR_resid, .after = ROLL_YR_sales) |>
+  relocate(SALE_PRICE, .after = SALE_DATE_FORMATTED_resid) |>
+  relocate(NET_SALE_PRICE, .after = SALE_PRICE) |>
+  relocate(NBR_PARCELS, .after = NET_SALE_PRICE) |>
+  relocate(SITE_NBR, .after = NBR_PARCELS) |>
+  relocate(OWNER_ID, .after = SITE_NBR) |>
+  arrange(PARCEL_ID, SALE_DATE_FORMATTED_sales, SALE_DATE_FORMATTED_resid)
+
+data_m2 <-
+  data_m1 |>
+    inner_join(improvements_d03, by = "PARCEL_ID") |>
+    rename(SITE_NBR_resid = SITE_NBR.x,
+           SITE_NBR_imprv = SITE_NBR.y,
+           SALEPARCEL_IND_resid = SALEPARCEL_IND.x,
+           SALEPARCEL_IND_improv = SALEPARCEL_IND.y,
+           YR_BUILT_resid = YR_BUILT.x,
+           YR_BUILT_improv = YR_BUILT.y,
+           GRADE_resid = GRADE.x,
+           GRADE_improv = GRADE.y,
+           ROLL_YR_improv = ROLL_YR) |>
+    relocate(INV_DATE_FORMATTED, .after = SALE_PRICE) |>
+    relocate(SITE_NBR_imprv, .after = SITE_NBR_resid) |>
+    relocate(GRADE_improv, .after = GRADE_resid) |>
+    relocate(YR_BUILT_improv, .after = YR_BUILT_resid) |>
+    relocate(SALEPARCEL_IND_improv, .after = SALEPARCEL_IND_resid) |>
+    relocate(ROLL_YR_improv, .after = ROLL_YR_resid) |>
+    relocate(IMPROVE_NBR, .after = INV_DATE_FORMATTED)
+
+data_m2
+```
+
+*   Now is the time to think about asking about sales "when a house is
+    bought, refurbished, and sold again within a small time frame" --
+    First I'm going to get rid of duplicate improvement numbers for each
+    parcel to make this easier to sift through visually
+
+*   As a side note, I'm also getting the sneaking suspicion that
+    SALE_DATE from the residential data and INV_DATE from the
+    improvements data are useless, so I'm gonna ax them -- remove
+    irrelevant columns
+
+```{r}
+data_m3 <- 
+  data_m2 |>
+  group_by(PARCEL_ID, SALE_PRICE) |>
+  distinct(IMPROVE_NBR, .keep_all = TRUE) |>
+  arrange(PARCEL_ID, SALE_PRICE, IMPROVE_NBR) |>
+  select(-c("SALE_DATE_FORMATTED_resid","INV_DATE_FORMATTED"))
+
+data_m3
+```
+
+*   I want to get the number of times each parcel has been sold so I can
+    define parcels with a lot of sales (\>3 seems good) and then filter
+    the data so that I'm only looking at oft-sold homes to investigate
+    whether they're suspicious.
+
+```{r}
+sales_counts <- 
+  data_m3 |>
+  group_by(PARCEL_ID) |>
+  distinct(SALE_PRICE) |>
+  tally()
+
+frequent_sales <-  sales_counts |>
+    filter(n > 3) |>
+    select(PARCEL_ID)
+
+frequent_sale_data_d01 <- 
+  data_m3 |>
+  filter(PARCEL_ID %in% frequent_sales$PARCEL_ID) |>
+  arrange(desc(IMPROVE_NBR)) |>
+  distinct(SALE_DATE_FORMATTED_sales, .keep_all = TRUE) |>
+  arrange(PARCEL_ID)
+
+frequent_sale_data_d01
+```
+
+*   So I have flagged a bit under 4k sales that could be suspicious. Now
+    I'm going to calculate the time difference between the sales for
+    each parcel and identify sales that occurred within 2 years of each
+    other. I'm temporarily stripping some columns out to focus on the
+    salient info for this question.
+
+```{r}
+close_sale_time <-
+  frequent_sale_data_d01 |>
+  group_by(PARCEL_ID) |>
+  arrange(SALE_DATE_FORMATTED_sales) |>
+  mutate(diff_time = as.duration(abs(SALE_DATE_FORMATTED_sales - lag(SALE_DATE_FORMATTED_sales)))) |>
+  select(PARCEL_ID, SALE_DATE_FORMATTED_sales, SALE_PRICE, diff_time) |>
+  arrange(PARCEL_ID, SALE_DATE_FORMATTED_sales) |>
+  filter(diff_time <= 63115200)
+
+close_sale_time
+```
+
+*   I've flagged 467 sales that occur within 2 years of the previous
+    sale for each parcel. I decided that we should also consider the
+    cost difference between these sales, reasoning that if you're making
+    more than 10k on a sale inside of 2 years you're probably flipping
+    it. This reasoning is subject to further investigation but it feels
+    right to me at the moment. An immediate hole I can poke in it is the
+    condition that the market is just skyrocketing and you decided to
+    move. But that seems like an unlikely condition and we're trying to
+    guess at some real complicated things. Who knows if this filter will
+    even affect our end game modeling. But it was a fun R puzzle to
+    solve and the code is exactly the same as with time so I'm going
+    with it.
+
+```{r}
+close_sale_price <-
+  frequent_sale_data_d01 |>
+  group_by(PARCEL_ID) |>
+  arrange(SALE_DATE_FORMATTED_sales) |>
+  mutate(diff_price = SALE_PRICE - lag(SALE_PRICE)) |>
+  select(PARCEL_ID, SALE_DATE_FORMATTED_sales, SALE_PRICE, diff_price) |>
+  arrange(PARCEL_ID, SALE_DATE_FORMATTED_sales) |>
+  filter(diff_price > 10000)
+
+close_sale_price
+```
+
+*  Now I'm going to make new columns that indicate if a sale should be
+    flagged as sketch for either time or money purposes and filter sales
+    that are flagged for both. Two metrics. If you meet both criteria,
+    there's a real good chance your flipping, so this logic goes, and we
+    want to remove you from our data set, which is intended to be
+    informative for humans who probably can't afford to play the real
+    estate game. Also wondering about how OWNER_ID works and whether
+    that could help us in this quest.
+
+```{r}
+frequent_sale_data_d02 <- 
+  frequent_sale_data_d01 |>
+  mutate(close_sale_time = case_when(SALE_DATE_FORMATTED_sales %in% close_sale_time$SALE_DATE_FORMATTED_sales ~ 1, 
+                                     TRUE ~ 0), 
+         close_sale_price = case_when(SALE_DATE_FORMATTED_sales %in% close_sale_price$SALE_DATE_FORMATTED_sales ~ 1, 
+                                     TRUE ~ 0)) |>
+  relocate(close_sale_time, .after = SALE_PRICE) |>
+  relocate(close_sale_price, .after = close_sale_time) |>
+  filter(close_sale_time & close_sale_price == 1)
+
+frequent_sale_data_d02
+```
+
+*   and look at that; 379 sales will be filtered out of the final data
+    set. I'm also going to get distinct sales so we can move on to the
+    assessment merge and finish this up. Realizing that I've essentially
+    switched from using parcel_IDs as unique keys to using SALES_DATE,
+    but I think that makes sense for what we'll be doing here.
+
+```{r}
+data_m4 <- 
+  data_m3 |>
+  filter(SALE_DATE_FORMATTED_sales %!in% frequent_sale_data_d02$SALE_DATE_FORMATTED_sales) |>
+  distinct(SALE_DATE_FORMATTED_sales, .keep_all = TRUE) |>
+  ungroup()
+
+data_m4
+
+length(unique(data_m4$PARCEL_ID))
+```
+
+*   For metrics purposes, we're looking at 17k parcels and 27.5k sales
+
+*   The notes suggest that all columns should be numerical for modeling,
+    but if we're modeling categorical variables we need to do different
+    things, so I'm keeping a mix of numerical and factor classes in
+    this.
+
+*   Moving on to assessments
+
+```{r}
+View(assessments_datadict)
+glimpse(assessments)
+```
+
+```{r}
+assessments_d01 <- 
+  assessments |>
+  arrange(PARCEL_ID) |>
+  select(-TIMESTAMP) 
+```
+
+```{r}
+data_m5 <- 
+  inner_join(data_m4, assessments_d01, by = "PARCEL_ID") |>
+  relocate(FULL_MARKET_VALUE, .after = SALE_PRICE) |>
+  mutate(price_diff = FULL_MARKET_VALUE - SALE_PRICE, .after = FULL_MARKET_VALUE)
+
+data_m5
+```
+
+*   I don't know how R is deciding to associate different
+    FULL_MARKET_VALUE values with different PARCEL IDs and it's making
+    me very nervous, like I'm missing something very basic and dumb
+    about structures and merging which is honestly likely.
+    
+<br>
+
+## Plotting Sales Price Data
+***
+
+* I will start by limiting the sales price to under $2M to see trends in the bulk of the data. 
+```{r}
+data_m5 |>
+  filter(SALE_PRICE < 2000000) |>
+  ggplot(
+    aes(x = SALE_PRICE, y = price_diff)) + 
+    geom_point(color = "#648FFF", stroke = 0, size = 1.5, alpha = .5) +
+    geom_smooth(method=lm, color = "#666666", linetype="dashed", size = .5) + 
+    scale_x_continuous(labels = scales::dollar_format()) + 
+    scale_y_continuous(labels = scales::dollar_format()) + 
+    theme_minimal() + 
+    labs(title = "Costlier Homes are Being Assessed at Lower Values", 
+             subtitle = element_blank(), 
+             y = "Difference from Fair Market Price", 
+             x = "Sale Price") + 
+    theme(legend.position="right", 
+                axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+                axis.title.x = element_text(margin = margin(t = 20)),
+                plot.margin = margin(20,50,20,0),
+                plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+```
+
+* The data show an inverse trend between assessment price and difference between sale price and fair market price. This suggests that houses that cost more are getting assessed at lower values. From an equity standpoint, this is problematic because individuals who have access to more resources are getting a better deal in their purchase price. 
+
+```{r}
+data_m5 |>
+  ggplot(
+    aes(x = SALE_PRICE, y = price_diff)) + 
+    geom_point(color = "#648FFF", stroke = 0, size = 1.5, alpha = .5) +
+    geom_smooth(method=lm, color = "#666666", linetype="dashed", size = .5) + 
+    scale_x_continuous(labels = scales::dollar_format()) + 
+    scale_y_continuous(labels = scales::dollar_format()) + 
+    theme_minimal() + 
+    labs(title = "Even Costlier Homes are Being Assessed at Even Lower Values", 
+             subtitle = element_blank(), 
+             y = "Difference from Fair Market Price", 
+             x = "Sale Price") + 
+    theme(legend.position="right", 
+                axis.title.y = element_text(margin = margin(l = 20, r = 20)),
+                axis.title.x = element_text(margin = margin(t = 20)),
+                plot.margin = margin(20,50,20,0),
+                plot.title = element_text(face = 'bold', margin = margin(10,0,10,0), size = 14))
+```
+
+* As we push out to see the most expensive homes for which we have data, the strength of the inverse relationship grows; that is to say, the deviation between fair market price and sales price is the highest for the costliest homes. 
