@@ -3,9 +3,9 @@
 title: "Derek Crowe for GovEx"
 subtitle: "Part 2 Data exploration and manipulation"
 output:
-    pdf_document: default
     html_document:
       df_print: paged
+    pdf_document: default
     html_notebook: default
 author: "Derek Crowe"
 date: "`r Sys.Date()`"
@@ -484,7 +484,8 @@ residential_building_d02 <-
 residential_building_d02
 ```
 
-*   One date is wrong -- subtract a CENTURY from it
+*   One date is wrong 
+  +   subtract a CENTURY from it
 
 ```{r}
 residential_building_d03 <- 
@@ -544,8 +545,7 @@ improvements_d03 |> arrange(PARCEL_ID)
 *   We want all metrics for unique sales, so I think an inner join is
     best to limit merge to rows which have values in all other data sets
     +   inner join sales with residential info first, then inner join with improvements 
-    + rename joined columns which have duplicated names to reference the data set from which they came in case one is
-    more relevant than the other 
+    + rename joined columns which have duplicated names to reference the data set from which they came in case one is more relevant than the other 
     + relocate columns to make it easier to see salient columns first. I think there's a prettier way to do
     this but it uses some "reduce" function that I'm not up on and I'm
     not going to figure it out right now.
@@ -593,14 +593,14 @@ data_m2
 ```
 
 *   Now is the time to think about asking about sales "when a house is
-    bought, refurbished, and sold again within a small time frame" --
-    First I'm going to get rid of duplicate improvement numbers for each
+    bought, refurbished, and sold again within a small time frame" 
++   First I'm going to get rid of duplicate improvement numbers for each
     parcel to make this easier to sift through visually
 
 *   As a side note, I'm also getting the sneaking suspicion that
     SALE_DATE from the residential data and INV_DATE from the
-    improvements data are useless, so I'm gonna ax them -- remove
-    irrelevant columns
+    improvements data are useless, so I'm gonna ax them 
+    + remove irrelevant columns
 
 ```{r}
 data_m3 <- 
